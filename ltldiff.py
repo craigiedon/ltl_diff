@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 
 EPS = 1e-8
 
@@ -11,10 +12,11 @@ class TermStatic:
 
 class TermDynamic:
     def __init__(self, xs):
+        assert xs.dim() == 3, "Dynamic term needs 3 dims: Batch_Size x Time_Steps x Spatial_Dims"
         self.xs = xs
 
     def eval(self, t):
-        return self.xs[t]
+        return self.xs[:, t]
 
 class BoolConst:
     def __init__(self, x):
@@ -36,10 +38,42 @@ class EQ:
         a = self.term_a.eval(t)
         b = self.term_b.eval(t)
 
-        return torch.abs(a - b)
+        return torch.norm(a - b, dim=1)
 
     def satisfy(self, t):
-        return self.term_a.eval(t) == self.term_b.eval(t)
+        return (self.term_a.eval(t) == self.term_b.eval(t)).all(1)
+
+
+class GEQ:
+    """ a >= b """
+
+    def __init__(self, term_a, term_b):
+        self.term_a = term_a
+        self.term_b = term_b
+    
+    def loss(self, t):
+        a = self.term_a.eval(t)
+        b = self.term_b.eval(t)
+        return (b - a).clamp(min=0.0).sum(1)
+
+    def satisfy(self, t):
+        return (self.term_a.eval(t) >= self.term_b.eval(t)).all(1)
+
+
+class LEQ:
+    """ a <= b """
+    def __init__(self, term_a, term_b):
+        self.term_a = term_a
+        self.term_b = term_b
+
+    def loss(self, t):
+        a = self.term_a.eval(t)
+        b = self.term_b.eval(t)
+        return (a - b).clamp(min=0.0).sum(1)
+
+    def satisfy(self, t):
+        return (self.term_a.eval(t) <= self.term_b.eval(t)).all(1)
+
 
 class GT:
     """ a > b """
@@ -51,11 +85,11 @@ class GT:
     def loss(self, t):
         a = self.term_a.eval(t)
         b = self.term_b.eval(t)
-        equality = torch.eq(a, b).type(a.type()) # strict greater than, so equality penalized
-        return torch.clamp(b - a, min=0.0) + equality
+        equality = (a == b).all(1).type(a.type()) # strict greater than, so equality penalized
+        return (b - a).clamp(min=0.0).sum(1) + equality
 
     def satisfy(self, t):
-        return self.term_a.eval(t) > self.term_b.eval(t)
+        return (self.term_a.eval(t) > self.term_b.eval(t)).all(1)
 
 
 class LT:
@@ -68,41 +102,11 @@ class LT:
     def loss(self, t):
         a = self.term_a.eval(t)
         b = self.term_b.eval(t)
-        equality = torch.eq(a,b).type(a.type()) # strict greater than, so equality penalized
-        return torch.clamp(a - b, min=0.0) + equality
+        equality = (a == b).all(1).type(a.type()) # strict greater than, so equality penalized
+        return (a - b).clamp(min=0.0).sum(1) + equality
 
     def satisfy(self, t):
-        return self.term_a.eval(t) < self.term_b.eval(t)
-
-class GEQ:
-    """ a >= b """
-
-    def __init__(self, term_a, term_b):
-        self.term_a = term_a
-        self.term_b = term_b
-    
-    def loss(self, t):
-        a = self.term_a.eval(t)
-        b = self.term_b.eval(t)
-        return torch.clamp(b - a, min=0.0)
-
-    def satisfy(self, t):
-        return self.term_a.eval(t) >= self.term_b.eval(t)
-
-
-class LEQ:
-    """ a <= b """
-    def __init__(self, term_a, term_b):
-        self.term_a = term_a
-        self.term_b = term_b
-
-    def loss(self, t):
-        a = self.term_a.eval(t)
-        b = self.term_b.eval(t)
-        return torch.clamp(a - b, min=0.0)
-
-    def satisfy(self, t):
-        return self.term_a.eval(t) <= self.term_b.eval(t)
+        return (self.term_a.eval(t) < self.term_b.eval(t)).all(1)
 
 
 class And:
@@ -167,13 +171,14 @@ class Always:
 
     def loss(self, t):
         assert t <= self.max_t
-        losses = torch.stack([self.exp.loss(i) for i in range(t, self.max_t + 1)])
-        return torch.sum(losses, dim=0, keepdim=True)
+        losses = torch.stack([self.exp.loss(i) for i in range(t, self.max_t)], 1)
+        # return torch.sum(losses, dim=1)
+        return soft_maximum(losses, 1, 50)
 
     def satisfy(self, t):
         assert t <= self.max_t
-        sats = torch.stack([self.exp.satisfy(i) for i in range(t, self.max_t + 1)])
-        return sats.all(0, keepdim=True)
+        sats = torch.stack([self.exp.satisfy(i) for i in range(t, self.max_t)], 1)
+        return sats.all(1)
 
 
 class Eventually:
@@ -184,13 +189,27 @@ class Eventually:
 
     def loss(self, t):
         assert t <= self.max_t
-        losses = torch.stack([self.exp.loss(i) for i in range(t, self.max_t + 1)])
-        return torch.prod(losses, dim=0, keepdim=True)
+        losses = torch.stack([self.exp.loss(i) for i in range(t, self.max_t)], 1)
+        # return torch.prod(losses, dim=1)
+        return soft_minimum(losses, 1, 50)
 
     def satisfy(self, t):
         assert t <= self.max_t
-        sats = torch.stack([self.exp.satisfy(i) for i in range(t, self.max_t + 1)])
-        return sats.any(0, keepdim=True)
+        sats = torch.stack([self.exp.satisfy(i) for i in range(t, self.max_t)], 1)
+        return sats.any(1)
+
+
+def soft_maximum(xs, dim, p):
+    ln_N = np.log(xs.shape[dim])
+    ln_means = (xs.log() * p).logsumexp(dim) - ln_N
+
+    return (ln_means / p).exp()
+
+
+def soft_minimum(xs, dim, p):
+    return soft_maximum(xs, dim, -p)
+
+    
 
 class Until:
     def __init__(self, a, b, max_t):
@@ -202,8 +221,8 @@ class Until:
         raise NotImplementedError()
 
     def satisfy(self, t):
-        sats_a = torch.stack([self.a.satisfy(i) for i in range(t, self.max_t + 1)])
-        sats_b = torch.stack([self.b.satisfy(i) for i in range(t, self.max_t + 1)])
+        sats_a = torch.stack([self.a.satisfy(i) for i in range(t, self.max_t)])
+        sats_b = torch.stack([self.b.satisfy(i) for i in range(t, self.max_t)])
 
         eventually_b = sats_b.any(dim=0, keepdim=True)
         bs_onward = torch.cumsum(sats_b.int(), dim=0)
@@ -219,15 +238,15 @@ class Negate:
         self.exp = exp
 
         if isinstance(self.exp, LT):
-            self.neg = GEQ(self.exp.a, self.exp.b)
+            self.neg = GEQ(self.exp.term_a, self.exp.term_b)
         elif isinstance(self.exp, GT):
-            self.neg = LEQ(self.exp, self.exp.b)
+            self.neg = LEQ(self.exp.term_a, self.exp.term_b)
         elif isinstance(self.exp, EQ):
-            self.neg = Or([LT(self.exp.a, self.exp.b), LT(self.exp.b, self.exp.a)])
+            self.neg = Or([LT(self.exp.term_a, self.exp.term_b), LT(self.exp.term_b, self.exp.term_a)])
         elif isinstance(self.exp, LEQ):
-            self.neg = GT(self.exp.a, self.exp.b)
+            self.neg = GT(self.exp.term_a, self.exp.term_b)
         elif isinstance(self.exp, GEQ):
-            self.neg = LT(self.exp.a, self.exp.b)
+            self.neg = LT(self.exp.term_a, self.exp.term_b)
         elif isinstance(self.exp, And):
             neg_exprs = [Negate(e) for e in self.exp.exprs]
             self.neg = Or(neg_exprs)
@@ -241,8 +260,14 @@ class Negate:
         elif isinstance(self.exp, Next):
             self.neg = Next(Negate(self.exp.exp))
         elif isinstance(self.exp, Eventually):
-            self.neg = Always(Negate(self.exp.exp))
+            self.neg = Always(Negate(self.exp.exp), self.exp.max_t)
         elif isinstance(self.exp, Always):
-            self.neg = Eventually(Negate(self.exp.exp))
+            self.neg = Eventually(Negate(self.exp.exp), self.max_t)
         else:
             assert False, 'Class not supported %s' % str(type(exp))
+
+    def loss(self, t):
+        return self.neg.loss(t)
+
+    def satisfy(self, t):
+        return self.neg.satisfy(t)
