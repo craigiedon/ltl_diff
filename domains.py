@@ -5,6 +5,7 @@ class Box:
     def __init__(self, a, b):
         self.a = a
         self.b = b
+        assert not self.is_empty()
 
     def is_empty(self):
         return torch.any(self.a > self.b)
