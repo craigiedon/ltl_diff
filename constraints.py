@@ -11,30 +11,34 @@ def constraint_loss(constraint, ins, targets, zs, net, rollout_func):
         
     return neg_losses, losses, sat
 
+def fully_global_ins(ins, epsilon):
+    low_ins = ins - epsilon
+    high_ins = ins + epsilon
+    return [Box(low_ins[:, i], high_ins[:, i]) for i in range(ins.shape[1])]
+
 
 class EventuallyReach:
-    def __init__(self, p, epsilon):
-        assert p.dim() == 1, "D"
-        self.p = p
+    def __init__(self, reach_id, epsilon):
+        # The index of object in start info that you need to eventually reach
+        self.reach_id = reach_id 
         self.epsilon = epsilon
 
     def condition(self, zs, ins, targets, net, rollout_func):
-        z_in = zs[0]
-        weights = net(z_in)
-        rollout_traj = rollout_func(z_in[:, 0], z_in[:, 1], weights)[0]
+        weights = net(zs)
+        rollout_traj = rollout_func(zs[:, 0], zs[:, 1], weights)[0]
+
+        reach_point = zs[:, self.reach_id]
 
         return ltd.Eventually(
             ltd.EQ(
                 ltd.TermDynamic(rollout_traj),
-                ltd.TermStatic(self.p),
+                ltd.TermStatic(reach_point),
             ),
             rollout_traj.shape[1]
         )
 
     def domains(self, ins, targets):
-        low_ins = ins - self.epsilon
-        high_ins = ins + self.epsilon
-        return [Box(low_ins, high_ins)]
+        return fully_global_ins(ins, self.epsilon)
 
 class StayInZone:
     def __init__(self, min_bound, max_bound, epsilon):
@@ -46,9 +50,8 @@ class StayInZone:
         self.epsilon = epsilon
 
     def condition(self, zs, ins, targets, net, rollout_func):
-        z_ins = zs[0]
-        weights = net(z_ins)
-        rollout_traj = rollout_func(weights)
+        weights = net(zs)
+        rollout_traj = rollout_func(zs[:, 0], zs[:, 1], weights)[0]
         rollout_term = ltd.TermDynamic(rollout_traj)
 
         return ltd.Always(
@@ -60,9 +63,7 @@ class StayInZone:
         )
 
     def domains(self, ins, targets):
-        low_ins = ins - self.epsilon
-        high_ins = ins + self.epsilon
-        return [Box(low_ins, high_ins)]
+        return fully_global_ins(ins, self.epsilon)
 
 
 class LipchitzContinuous:
@@ -70,13 +71,12 @@ class LipchitzContinuous:
         self.smooth_thresh = smooth_thresh
         self.epsilon = epsilon
 
-    def constraint(self, zs, ins, targets, net, rollout_func):
-        z_ins = zs[0]
+    def condition(self, zs, ins, targets, net, rollout_func):
         weights_x = net(ins)
-        weights_z = net(z_ins)
+        weights_z = net(zs)
 
-        rollout_x = rollout_func(weights_x)
-        rollout_z = rollout_func(weights_z)
+        rollout_x = rollout_func(ins[:, 0], ins[:, 1], weights_x)[0]
+        rollout_z = rollout_func(zs[:, 0], zs[:, 1], weights_z)[0]
 
         rollout_diffs = ltd.TermDynamic(torch.abs(rollout_x - rollout_z))
         input_diffs = ltd.TermStatic(self.smooth_thresh * torch.abs(ins - zs))
@@ -87,40 +87,37 @@ class LipchitzContinuous:
         )
 
     def domains(self, ins, targets):
-        return [Box(ins - self.epsilon, ins + self.epsilon)]
+        return fully_global_ins(ins, self.epsilon)
 
 
 class DontTipEarly:
-    def __init__(self, fixed_orientation, tip_point, min_dist, epsilon):
-        assert tip_point.dim() == 2 # N X D
-        self.tip_point = tip_point
+    def __init__(self, fixed_orientation, tip_id, min_dist, epsilon):
+        self.tip_id = tip_id
         self.min_dist = min_dist
         self.fixed_orientation = fixed_orientation
         self.epsilon = epsilon
 
-    def constraint(self, zs, ins, targets, net, rollout_func):
-        z_ins = zs[0]
-        weights = net(z_ins)
-        rollout = rollout_func(weights)
+    def condition(self, zs, ins, targets, net, rollout_func):
+        weights = net(zs)
+        rollout = rollout_func(zs[:, 0], zs[:, 1], weights)[0]
 
         # Assuming final dimensions are x, y, theta (rotation)
-        rotation_terms = ltd.TermStatic(rollout[:, :, 2])
+        rotation_terms = ltd.TermDynamic(rollout[:, :, 2:3])
 
         # Measuring the distance across dimensions...
-        dist_to_tip = ltd.TermDynamic(torch.norm(rollout - self.tip_point[:, None, :], dim=2))
+        tip_point = zs[:, self.tip_id]
+        dist_to_tip = ltd.TermDynamic(torch.norm(rollout[:, :, :2] - tip_point[:, None, :], dim=2, keepdim=True))
 
         return ltd.Always(
             ltd.Implication(
-                ltd.GT(dist_to_tip, self.min_dist),
-                ltd.EQ(self.fixed_orientation, rotation_terms)
+                ltd.GT(dist_to_tip, ltd.TermStatic(self.min_dist)),
+                ltd.EQ(ltd.TermStatic(self.fixed_orientation), rotation_terms)
             ),
             rollout.shape[1]
         )
 
     def domains(self, ins, targets):
-        low_in = ins - self.epsilon
-        high_in = ins + self.epsilon
-        return [Box(low_in, high_in)]
+        return fully_global_ins(ins, self.epsilon)
 
 
 
@@ -129,14 +126,13 @@ class MoveSlowly:
         self.max_velocity = max_velocity
         self.epsilon = epsilon
 
-    def constraint(self, zs, ins, targets, net, rollout_func):
-        z_ins = zs[0]
-        weights = net(z_ins)
-        rollout = rollout_func(weights)
+    def condition(self, zs, ins, targets, net, rollout_func):
+        weights = net(zs)
+        rollout = rollout_func(zs[:, 0], zs[:, 1], weights)[0]
 
         displacements = torch.zeros_like(rollout)
         displacements[:, 1:, :] = rollout[:, 1:, :] - rollout[:, :-1, :] # i.e., v_t = x_{t + 1} - x_t
-        velocities = ltd.TermDynamic(torch.norm(displacements, dim=2))
+        velocities = ltd.TermDynamic(torch.norm(displacements, dim=2, keepdim=True))
 
         return ltd.Always(
             ltd.LT(velocities, ltd.TermStatic(self.max_velocity)),
@@ -144,30 +140,29 @@ class MoveSlowly:
         )
 
     def domains(self, ins, targets):
-        low_in = ins - self.epsilon
-        high_in = ins + self.epsilon
-        return [Box(low_in, high_in)]
+        return fully_global_ins(ins, self.epsilon)
 
 
 class AvoidPoint:
-    def __init__(self, point, min_dist, epsilon):
-        assert point.dim() == 2 # N X D
-        self.point = point
+    def __init__(self, point_id, min_dist, epsilon):
+        self.point_id = point_id
         self.min_dist = min_dist
         self.epsilon = epsilon
 
-    def constraint(self, zs, ins, targets, net, rollout_func):
-        z_ins = zs[0]
-        weights = net(z_ins)
-        rollout = rollout_func(weights)
+    def condition(self, zs, ins, targets, net, rollout_func):
+        weights = net(zs)
+        rollout = rollout_func(zs[:, 0], zs[:, 1], weights)[0]
 
-        dist_to_point = ltd.TermDynamic(torch.norm(rollout - self.point[:, None, :], dim=2))
+        point = zs[:, self.point_id]
+
+        dist_to_point = ltd.TermDynamic(
+            torch.norm(rollout - point[:, None, :], dim=2, keepdim=True)
+        )
+
         return ltd.Always(
             ltd.GT(dist_to_point, ltd.TermStatic(self.min_dist)),
             rollout.shape[1]
         )
 
     def domains(self, ins, targets):
-        low_in = ins - self.epsilon
-        high_in = ins + self.epsilon
-        return [Box(low_in, high_in)]
+        return fully_global_ins(ins, self.epsilon)

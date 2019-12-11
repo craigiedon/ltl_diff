@@ -116,7 +116,8 @@ class And:
 
     def loss(self, t):
         losses = torch.stack([exp.loss(t) for exp in self.exprs])
-        return torch.sum(losses, dim=0, keepdim=True)
+        return soft_maximum(losses, 0, 50)
+        # return torch.sum(losses, dim=0, keepdim=True)
 
     def satisfy(self, t):
         sats = torch.stack([exp.satisfy(t) for exp in self.exprs])
@@ -130,7 +131,8 @@ class Or:
 
     def loss(self, t):
         losses = torch.stack([exp.loss(t) for exp in self.exprs])
-        return torch.prod(losses, dim=0, keepdim=True)
+        return soft_minimum(losses, 0, 50)
+        # return torch.prod(losses, dim=0, keepdim=True)
 
     def satisfy(self, t):
         sats = torch.stack([exp.satisfy(t) for exp in self.exprs])
