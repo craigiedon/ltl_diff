@@ -18,24 +18,25 @@ def fully_global_ins(ins, epsilon):
 
 
 class EventuallyReach:
-    def __init__(self, reach_id, epsilon):
+    def __init__(self, reach_ids, epsilon):
         # The index of object in start info that you need to eventually reach
-        self.reach_id = reach_id 
+        self.reach_ids = reach_ids 
         self.epsilon = epsilon
 
     def condition(self, zs, ins, targets, net, rollout_func):
         weights = net(zs)
-        rollout_traj = rollout_func(zs[:, 0], zs[:, 1], weights)[0]
+        rollout_traj = rollout_func(zs[:, 0], zs[:, -1], weights)[0]
 
-        reach_point = zs[:, self.reach_id]
+        rollout_term = ltd.TermDynamic(rollout_traj)
 
-        return ltd.Eventually(
-            ltd.EQ(
-                ltd.TermDynamic(rollout_traj),
-                ltd.TermStatic(reach_point),
-            ),
-            rollout_traj.shape[1]
-        )
+        reach_constraints = []
+        for reach_point in zs[:, self.reach_ids]:
+            reach_constraints.append(ltd.Eventually(
+                ltd.EQ(rollout_term, ltd.TermStatic(reach_point)),
+                rollout_traj.shape[1]
+            ))
+        
+        return ltd.And(reach_constraints)
 
     def domains(self, ins, targets):
         return fully_global_ins(ins, self.epsilon)
@@ -51,7 +52,7 @@ class StayInZone:
 
     def condition(self, zs, ins, targets, net, rollout_func):
         weights = net(zs)
-        rollout_traj = rollout_func(zs[:, 0], zs[:, 1], weights)[0]
+        rollout_traj = rollout_func(zs[:, 0], zs[:, -1], weights)[0]
         rollout_term = ltd.TermDynamic(rollout_traj)
 
         return ltd.Always(
@@ -75,8 +76,8 @@ class LipchitzContinuous:
         weights_x = net(ins)
         weights_z = net(zs)
 
-        rollout_x = rollout_func(ins[:, 0], ins[:, 1], weights_x)[0]
-        rollout_z = rollout_func(zs[:, 0], zs[:, 1], weights_z)[0]
+        rollout_x = rollout_func(ins[:, 0], ins[:, -1], weights_x)[0]
+        rollout_z = rollout_func(zs[:, 0], zs[:, -1], weights_z)[0]
 
         rollout_diffs = ltd.TermDynamic(torch.abs(rollout_x - rollout_z))
         input_diffs = ltd.TermStatic(self.smooth_thresh * torch.abs(ins - zs))
@@ -99,7 +100,7 @@ class DontTipEarly:
 
     def condition(self, zs, ins, targets, net, rollout_func):
         weights = net(zs)
-        rollout = rollout_func(zs[:, 0], zs[:, 1], weights)[0]
+        rollout = rollout_func(zs[:, 0], zs[:, -1], weights)[0]
 
         # Assuming final dimensions are x, y, theta (rotation)
         rotation_terms = ltd.TermDynamic(rollout[:, :, 2:3])
@@ -128,7 +129,7 @@ class MoveSlowly:
 
     def condition(self, zs, ins, targets, net, rollout_func):
         weights = net(zs)
-        rollout = rollout_func(zs[:, 0], zs[:, 1], weights)[0]
+        rollout = rollout_func(zs[:, 0], zs[:, -1], weights)[0]
 
         displacements = torch.zeros_like(rollout)
         displacements[:, 1:, :] = rollout[:, 1:, :] - rollout[:, :-1, :] # i.e., v_t = x_{t + 1} - x_t
@@ -151,7 +152,7 @@ class AvoidPoint:
 
     def condition(self, zs, ins, targets, net, rollout_func):
         weights = net(zs)
-        rollout = rollout_func(zs[:, 0], zs[:, 1], weights)[0]
+        rollout = rollout_func(zs[:, 0], zs[:, -1], weights)[0]
 
         point = zs[:, self.point_id]
 

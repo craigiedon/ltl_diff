@@ -6,7 +6,7 @@ from .constraints import constraint_loss
 def evaluate_constraint(ins, targets, constraint, net, rollout_func):
     domains = constraint.domains(ins, targets)
     z_batches = general_attack(ins, targets, constraint, domains,
-                               100, net, rollout_func)
+                               1, net, rollout_func)
 
     _, pos_losses , is_satisfied = constraint_loss(constraint, ins, targets, z_batches, net, rollout_func)
 
