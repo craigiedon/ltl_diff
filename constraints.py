@@ -30,9 +30,10 @@ class EventuallyReach:
         rollout_term = ltd.TermDynamic(rollout_traj)
 
         reach_constraints = []
-        for reach_point in zs[:, self.reach_ids]:
+        for reach_id in self.reach_ids:
+            reach_point_batch = zs[:, reach_id]
             reach_constraints.append(ltd.Eventually(
-                ltd.EQ(rollout_term, ltd.TermStatic(reach_point)),
+                ltd.EQ(rollout_term, ltd.TermStatic(reach_point_batch)),
                 rollout_traj.shape[1]
             ))
         
