@@ -264,7 +264,7 @@ class Negate:
         elif isinstance(self.exp, Eventually):
             self.neg = Always(Negate(self.exp.exp), self.exp.max_t)
         elif isinstance(self.exp, Always):
-            self.neg = Eventually(Negate(self.exp.exp), self.max_t)
+            self.neg = Eventually(Negate(self.exp.exp), self.exp.max_t)
         else:
             assert False, 'Class not supported %s' % str(type(exp))
 
