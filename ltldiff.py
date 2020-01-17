@@ -116,7 +116,7 @@ class And:
 
     def loss(self, t):
         losses = torch.stack([exp.loss(t) for exp in self.exprs])
-        return soft_maximum(losses, 0, 50)
+        return soft_maximum(losses, 0)
         # return torch.sum(losses, dim=0, keepdim=True)
 
     def satisfy(self, t):
@@ -131,7 +131,7 @@ class Or:
 
     def loss(self, t):
         losses = torch.stack([exp.loss(t) for exp in self.exprs])
-        return soft_minimum(losses, 0, 50)
+        return soft_minimum(losses, 0)
         # return torch.prod(losses, dim=0, keepdim=True)
 
     def satisfy(self, t):
@@ -175,7 +175,7 @@ class Always:
         assert t <= self.max_t
         losses = torch.stack([self.exp.loss(i) for i in range(t, self.max_t)], 1)
         # return torch.sum(losses, dim=1)
-        return soft_maximum(losses, 1, 50)
+        return soft_maximum(losses, 1)
 
     def satisfy(self, t):
         assert t <= self.max_t
@@ -192,8 +192,7 @@ class Eventually:
     def loss(self, t):
         assert t <= self.max_t
         losses = torch.stack([self.exp.loss(i) for i in range(t, self.max_t)], 1)
-        # return torch.prod(losses, dim=1)
-        return soft_minimum(losses, 1, 50)
+        return soft_minimum(losses, 1)
 
     def satisfy(self, t):
         assert t <= self.max_t
@@ -201,15 +200,14 @@ class Eventually:
         return sats.any(1)
 
 
-def soft_maximum(xs, dim, p):
+def soft_maximum(xs, dim, p=200):
     ln_N = np.log(xs.shape[dim])
-    ln_means = (xs.log() * p).logsumexp(dim) - ln_N
-
-    return (ln_means / p).exp()
+    return ((xs * p).logsumexp(dim) - ln_N) / p
 
 
-def soft_minimum(xs, dim, p):
-    return soft_maximum(xs, dim, -p)
+def soft_minimum(xs, dim, p=200):
+    ln_N = np.log(xs.shape[dim])
+    return ((xs * -p).logsumexp(dim) - ln_N) / (-p)
 
     
 
