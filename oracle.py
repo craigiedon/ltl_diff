@@ -3,10 +3,14 @@ import torch
 from torch import optim
 from .constraints import constraint_loss
 
-def evaluate_constraint(ins, targets, constraint, net, rollout_func):
+def evaluate_constraint(ins, targets, constraint, net, rollout_func, adversarial):
     domains = constraint.domains(ins, targets)
-    z_batches = general_attack(ins, targets, constraint, domains,
-                               1, net, rollout_func)
+
+    if adversarial:
+        z_batches = general_attack(ins, targets, constraint, domains,
+                                   1, net, rollout_func)
+    else:
+        z_batches = ins
 
     _, pos_losses , is_satisfied = constraint_loss(constraint, ins, targets, z_batches, net, rollout_func)
 
@@ -16,6 +20,9 @@ def evaluate_constraint(ins, targets, constraint, net, rollout_func):
 def general_attack(input_batch, target_batch, constraint, domains, num_iters, net, rollout_func):
     if len(domains) == 0:
         return None
+
+    for domain in domains:
+        print(domain.is_empty())
 
     z_best = [dom.sample() for dom in domains]
     for z in z_best:

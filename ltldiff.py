@@ -183,6 +183,7 @@ class Always:
         return sats.all(1)
 
 
+
 class Eventually:
     """ Eventually X """
     def __init__(self, exp, max_t):
