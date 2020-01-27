@@ -25,22 +25,23 @@ def general_attack(input_batch, target_batch, constraint, domains, num_iters, ne
     for z in z_best:
         z.requires_grad = True
 
-    optimizer = optim.SGD(z_best, lr=0.01, momentum=0.99, nesterov=True)
 
     assert z_best[0].ndim == 2
 
-    for _ in range(num_iters):
+    # optimizer = optim.SGD(z_best, lr=0.01, momentum=0.99, nesterov=True)
 
-        z_view = torch.stack(z_best).transpose(1, 0)
-        neg_losses, _, _ = constraint_loss(constraint, input_batch, target_batch, z_view, net, rollout_func)
+    # for _ in range(num_iters):
 
-        optimizer.zero_grad()
-        avg_neg_loss = torch.mean(neg_losses)
-        avg_neg_loss.backward()
-        optimizer.step()
+    #     z_view = torch.stack(z_best).transpose(1, 0)
+    #     neg_losses, _, _ = constraint_loss(constraint, input_batch, target_batch, z_view, net, rollout_func)
+
+    #     optimizer.zero_grad()
+    #     avg_neg_loss = torch.mean(neg_losses)
+    #     avg_neg_loss.backward()
+    #     optimizer.step()
         
-        # Projected gradient descent
-        for i, dom in enumerate(domains):
-            z_best[i].data = dom.project(z_best[i])
+    #     Projected gradient descent
+    #     for i, dom in enumerate(domains):
+    #         z_best[i].data = dom.project(z_best[i])
 
     return torch.stack(z_best).transpose(1,0) #TODO: Support multiple retries
