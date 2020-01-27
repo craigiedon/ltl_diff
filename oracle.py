@@ -21,9 +21,6 @@ def general_attack(input_batch, target_batch, constraint, domains, num_iters, ne
     if len(domains) == 0:
         return None
 
-    for domain in domains:
-        print(domain.is_empty())
-
     z_best = [dom.sample() for dom in domains]
     for z in z_best:
         z.requires_grad = True
