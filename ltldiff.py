@@ -121,7 +121,7 @@ class And:
 
     def satisfy(self, t):
         sats = torch.stack([exp.satisfy(t) for exp in self.exprs])
-        return sats.all(0, keepdim=True)
+        return sats.all(0, keepdim=False)
 
 
 class Or:
@@ -135,8 +135,9 @@ class Or:
         # return torch.prod(losses, dim=0, keepdim=True)
 
     def satisfy(self, t):
-        sats = torch.stack([exp.satisfy(t) for exp in self.exprs])
-        return sats.any(0, keepdim=True)
+        sats_raw = [exp.satisfy(t) for exp in self.exprs]
+        sats = torch.stack(sats_raw)
+        return sats.any(0, keepdim=False)
 
 
 class Implication:

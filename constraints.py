@@ -93,27 +93,35 @@ class LipchitzContinuous:
 
 
 class DontTipEarly:
-    def __init__(self, fixed_orientation, tip_id, min_dist, epsilon):
+    def __init__(self, orientation_lb, orientation_ub, tip_id, min_dist, epsilon):
         self.tip_id = tip_id
         self.min_dist = min_dist
-        self.fixed_orientation = fixed_orientation
+        self.orientation_lb = orientation_lb
+        self.orientation_ub = orientation_ub
         self.epsilon = epsilon
 
     def condition(self, zs, ins, targets, net, rollout_func):
         weights = net(zs)
         rollout = rollout_func(zs[:, 0], zs[:, -1], weights)[0]
 
-        # Assuming final dimensions are x, y, theta (rotation)
-        rotation_terms = ltd.TermDynamic(rollout[:, :, 2:3])
+        # Assuming xyz-rpy
+        rotation_terms = ltd.TermDynamic(rollout[:, :, 3:])
 
         # Measuring the distance across dimensions...
-        tip_point = zs[:, self.tip_id]
-        dist_to_tip = ltd.TermDynamic(torch.norm(rollout[:, :, :2] - tip_point[:, None, :], dim=2, keepdim=True))
+        tip_point = zs[:, self.tip_id, 0:2]
+
+        dist_to_tip = ltd.TermDynamic(torch.norm(rollout[:, :, 0:2] - tip_point[:, None, :], dim=2, keepdim=True))
 
         return ltd.Always(
             ltd.Implication(
-                ltd.GT(dist_to_tip, ltd.TermStatic(self.min_dist)),
-                ltd.EQ(ltd.TermStatic(self.fixed_orientation), rotation_terms)
+                ltd.Or([
+                    ltd.GEQ(dist_to_tip, ltd.TermStatic(self.min_dist)),
+                    ltd.LEQ(ltd.TermDynamic(rollout[:, :, 2:3]), ltd.TermStatic(zs[:, 1, 2:3]))
+                ]),
+                ltd.And([
+                    ltd.GEQ(rotation_terms, ltd.TermStatic(self.orientation_lb)),
+                    ltd.LEQ(rotation_terms, ltd.TermStatic(self.orientation_ub))
+                ])
             ),
             rollout.shape[1]
         )
@@ -165,6 +173,36 @@ class AvoidPoint:
             ltd.GT(dist_to_point, ltd.TermStatic(self.min_dist)),
             rollout.shape[1]
         )
+
+    def domains(self, ins, targets):
+        return fully_global_ins(ins, self.epsilon)
+
+class AvoidAndPatrolConstant:
+    def __init__(self, av_point, patrol_point, min_avoid_dist, epsilon):
+        self.av_point = av_point
+        self.patrol_point = patrol_point
+        self.epsilon = epsilon
+        self.min_avoid_dist = min_avoid_dist
+
+    def condition(self, zs, ins, targets, net, rollout_func):
+        weights = net(zs)
+        rollout = rollout_func(zs[:, 0], zs[:, -1], weights)[0]
+
+
+        dist_avoid = ltd.TermDynamic(
+            torch.norm(rollout[:, :, 0:2] - self.av_point, dim=2, keepdim=True)
+        )
+
+        return ltd.And([
+            ltd.Always(
+                ltd.GT(dist_avoid, ltd.TermStatic(self.min_avoid_dist)),
+                rollout.shape[1]
+            ),
+            ltd.Eventually(
+                ltd.EQ(ltd.TermDynamic(rollout[:, :, 0:2]), ltd.TermStatic(self.patrol_point)),
+                rollout.shape[1]
+            )
+        ])
 
     def domains(self, ins, targets):
         return fully_global_ins(ins, self.epsilon)
